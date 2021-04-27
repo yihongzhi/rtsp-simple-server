@@ -13,6 +13,7 @@ import (
 
 	"github.com/aler9/rtsp-simple-server/internal/conf"
 	"github.com/aler9/rtsp-simple-server/internal/externalcmd"
+	"github.com/aler9/rtsp-simple-server/internal/hlssource"
 	"github.com/aler9/rtsp-simple-server/internal/logger"
 	"github.com/aler9/rtsp-simple-server/internal/readpublisher"
 	"github.com/aler9/rtsp-simple-server/internal/rtmpsource"
@@ -397,12 +398,15 @@ func (pa *Path) exhaustChannels() {
 func (pa *Path) hasExternalSource() bool {
 	return strings.HasPrefix(pa.conf.Source, "rtsp://") ||
 		strings.HasPrefix(pa.conf.Source, "rtsps://") ||
-		strings.HasPrefix(pa.conf.Source, "rtmp://")
+		strings.HasPrefix(pa.conf.Source, "rtmp://") ||
+		strings.HasPrefix(pa.conf.Source, "http://") ||
+		strings.HasPrefix(pa.conf.Source, "https://")
 }
 
 func (pa *Path) startExternalSource() {
-	if strings.HasPrefix(pa.conf.Source, "rtsp://") ||
-		strings.HasPrefix(pa.conf.Source, "rtsps://") {
+	switch {
+	case strings.HasPrefix(pa.conf.Source, "rtsp://") ||
+		strings.HasPrefix(pa.conf.Source, "rtsps://"):
 		pa.source = rtspsource.New(
 			pa.conf.Source,
 			pa.conf.SourceProtocolParsed,
@@ -415,11 +419,19 @@ func (pa *Path) startExternalSource() {
 			pa.stats,
 			pa)
 
-	} else if strings.HasPrefix(pa.conf.Source, "rtmp://") {
+	case strings.HasPrefix(pa.conf.Source, "rtmp://"):
 		pa.source = rtmpsource.New(
 			pa.conf.Source,
 			pa.readTimeout,
 			pa.writeTimeout,
+			&pa.sourceWg,
+			pa.stats,
+			pa)
+
+	case strings.HasPrefix(pa.conf.Source, "http://") ||
+		strings.HasPrefix(pa.conf.Source, "https://"):
+		pa.source = hlssource.New(
+			pa.conf.Source,
 			&pa.sourceWg,
 			pa.stats,
 			pa)
