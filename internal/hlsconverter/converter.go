@@ -104,11 +104,11 @@ func ipEqualOrInRange(ip net.IP, ips []interface{}) bool {
 
 // Request is an HTTP request received by an HLS server.
 type Request struct {
-	Path     string
-	FileName string
-	Req      *http.Request
-	W        http.ResponseWriter
-	Res      chan io.Reader
+	Dir  string
+	File string
+	Req  *http.Request
+	W    http.ResponseWriter
+	Res  chan io.Reader
 }
 
 type trackIDPayloadPair struct {
@@ -146,7 +146,7 @@ type Converter struct {
 	tsByName        map[string]*tsFile
 	tsDeleteCount   int
 	tsMutex         sync.RWMutex
-	lastRequestTime int64
+	lastRequestTime *int64
 
 	// in
 	request chan Request
@@ -176,9 +176,12 @@ func New(
 		parent:             parent,
 		ctx:                ctx,
 		ctxCancel:          ctxCancel,
-		lastRequestTime:    time.Now().Unix(),
-		tsByName:           make(map[string]*tsFile),
-		request:            make(chan Request),
+		lastRequestTime: func() *int64 {
+			v := time.Now().Unix()
+			return &v
+		}(),
+		tsByName: make(map[string]*tsFile),
+		request:  make(chan Request),
 	}
 
 	c.log(logger.Info, "opened")
@@ -534,7 +537,7 @@ func (c *Converter) runInner(innerCtx context.Context) error {
 	for {
 		select {
 		case <-closeCheckTicker.C:
-			t := time.Unix(atomic.LoadInt64(&c.lastRequestTime), 0)
+			t := time.Unix(atomic.LoadInt64(c.lastRequestTime), 0)
 			if time.Since(t) >= closeAfterInactivity {
 				c.ringBuffer.Close()
 				<-writerDone
@@ -563,7 +566,7 @@ func (c *Converter) runRequestHandler(terminate chan struct{}, done chan struct{
 		case preq := <-c.request:
 			req := preq
 
-			atomic.StoreInt64(&c.lastRequestTime, time.Now().Unix())
+			atomic.StoreInt64(c.lastRequestTime, time.Now().Unix())
 
 			conf := c.path.Conf()
 
@@ -589,7 +592,7 @@ func (c *Converter) runRequestHandler(terminate chan struct{}, done chan struct{
 			}
 
 			switch {
-			case req.FileName == "stream.m3u8":
+			case req.File == "stream.m3u8":
 				func() {
 					c.tsMutex.RLock()
 					defer c.tsMutex.RUnlock()
@@ -626,11 +629,12 @@ func (c *Converter) runRequestHandler(terminate chan struct{}, done chan struct{
 						cnt += f.Name() + ".ts\n"
 					}
 
+					req.W.Header().Set("Content-Type", `application/x-mpegURL`)
 					req.Res <- bytes.NewReader([]byte(cnt))
 				}()
 
-			case strings.HasSuffix(req.FileName, ".ts"):
-				base := strings.TrimSuffix(req.FileName, ".ts")
+			case strings.HasSuffix(req.File, ".ts"):
+				base := strings.TrimSuffix(req.File, ".ts")
 
 				c.tsMutex.RLock()
 				f, ok := c.tsByName[base]
@@ -642,9 +646,10 @@ func (c *Converter) runRequestHandler(terminate chan struct{}, done chan struct{
 					continue
 				}
 
+				req.W.Header().Set("Content-Type", `video/MP2T`)
 				req.Res <- f.buf.NewReader()
 
-			case req.FileName == "":
+			case req.File == "":
 				req.Res <- bytes.NewReader([]byte(index))
 
 			default:
